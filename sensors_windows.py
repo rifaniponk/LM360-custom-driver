@@ -1,6 +1,6 @@
-"""Windows sensor readout: LibreHardwareMonitorLib (via pythonnet) for CPU/GPU,
-Windows PDH performance counters for disk activity and as an integrated-GPU
-fallback when LHM doesn't enumerate a GPU at all.
+"""Windows sensor readout: LibreHardwareMonitorLib (via pythonnet) for CPU/GPU/
+RAM/storage temp, shutil for storage capacity, and a Windows PDH performance
+counter as an integrated-GPU load fallback when LHM doesn't enumerate a GPU.
 
 Deliberately brand-agnostic: picks sensors by SensorType + fuzzy name matching
 instead of hardcoding vendor-specific sensor name strings, so it doesn't need
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import sys
 
 import win32pdh
@@ -29,54 +30,6 @@ def _load_lhm_types():
     from LibreHardwareMonitor.Hardware import Computer, HardwareType, SensorType
 
     return Computer, HardwareType, SensorType
-
-
-class PdhCounter:
-    """Wraps a single PDH counter. First read() after open always returns None -
-    rate counters need two samples to produce a value."""
-
-    def __init__(self, path: str):
-        self.path = path
-        self.query = None
-        self.counter = None
-        self._primed = False
-
-    def _open(self) -> bool:
-        try:
-            self.query = win32pdh.OpenQuery()
-            self.counter = win32pdh.AddCounter(self.query, self.path)
-            return True
-        except Exception:
-            logger.debug("Failed to open PDH counter %s", self.path, exc_info=True)
-            self.query = None
-            self.counter = None
-            return False
-
-    def read(self) -> float | None:
-        if self.query is None and not self._open():
-            return None
-        try:
-            win32pdh.CollectQueryData(self.query)
-        except Exception:
-            logger.debug("PDH CollectQueryData failed for %s", self.path, exc_info=True)
-            return None
-        if not self._primed:
-            self._primed = True
-            return None
-        try:
-            _, value = win32pdh.GetFormattedCounterValue(self.counter, win32pdh.PDH_FMT_DOUBLE)
-            return value
-        except Exception:
-            logger.debug("PDH GetFormattedCounterValue failed for %s", self.path, exc_info=True)
-            return None
-
-    def close(self) -> None:
-        if self.query is not None:
-            try:
-                win32pdh.CloseQuery(self.query)
-            except Exception:
-                logger.debug("Error closing PDH query", exc_info=True)
-            self.query = None
 
 
 class IGpuPdhReader:
@@ -146,7 +99,6 @@ class SensorReader:
         self.computer.IsStorageEnabled = True
         self.computer.Open()
 
-        self._disk_pdh = PdhCounter(r"\PhysicalDisk(_Total)\% Disk Time")
         self._igpu_pdh = IGpuPdhReader()
 
     def close(self) -> None:
@@ -154,7 +106,6 @@ class SensorReader:
             self.computer.Close()
         except Exception:
             logger.debug("Error closing LHM Computer", exc_info=True)
-        self._disk_pdh.close()
         self._igpu_pdh.close()
 
     def _update_all(self, hardware) -> None:
@@ -218,12 +169,21 @@ class SensorReader:
         if memory_hw is not None:
             sensors = list(memory_hw.Sensors)
             stats["ram_used_pct"] = self._pick(sensors, self._SensorType.Load, ["memory"])
+            ram_used = self._pick(sensors, self._SensorType.Data, ["used"])
+            ram_available = self._pick(sensors, self._SensorType.Data, ["available"])
+            if ram_used is not None:
+                stats["ram_used_gb"] = ram_used
+            if ram_used is not None and ram_available is not None:
+                stats["ram_total_gb"] = ram_used + ram_available
 
         if storage_temp is not None:
             stats["ssd_temp_c"] = storage_temp
 
-        disk_busy = self._disk_pdh.read()
-        if disk_busy is not None:
-            stats["disk_busy_pct"] = min(disk_busy, 100.0)
+        try:
+            usage = shutil.disk_usage("C:\\")
+            stats["ssd_used_gb"] = usage.used / (1024 ** 3)
+            stats["ssd_total_gb"] = usage.total / (1024 ** 3)
+        except OSError:
+            logger.debug("Failed to read C: disk usage", exc_info=True)
 
         return stats

@@ -25,7 +25,6 @@ RING_TRACK = (52, 53, 62)
 BAR_TRACK_COLOR = (52, 53, 62)
 TEXT_COLOR = (235, 235, 240)
 MUTED_COLOR = (150, 150, 160)
-LOAD_COLOR = (120, 160, 245)
 
 _FONT_CANDIDATES = [
     "segoeui.ttf",
@@ -79,6 +78,54 @@ def temp_color(celsius: float | None) -> tuple[int, int, int]:
     return (235, 70, 70)
 
 
+# Shared 5-color scale (cool -> healthy -> warning -> hot -> critical), reused
+# across metrics so the same color always means roughly the same "how worried
+# should I be" - but the % thresholds that trigger each color differ per
+# metric, calibrated to what's actually normal for that kind of number.
+_COOL = (90, 170, 250)
+_GOOD = (110, 210, 120)
+_WARN = (235, 210, 80)
+_HOT = (240, 150, 60)
+_CRIT = (235, 70, 70)
+
+
+def _tier_color(value: float | None, bands):
+    """bands: ascending [(upper_bound_exclusive, color), ..., (None, color)]."""
+    if value is None:
+        return MUTED_COLOR
+    for upper, color in bands:
+        if upper is None or value < upper:
+            return color
+    return bands[-1][1]
+
+
+# CPU/GPU load and disk I/O activity are instantaneous utilization - brief
+# spikes to 100% are normal, so the danger zone starts high.
+_LOAD_BANDS = [(25, _COOL), (50, _GOOD), (75, _WARN), (90, _HOT), (None, _CRIT)]
+# RAM: common guidance is you don't want to be sitting near-full since that
+# hurts caching/paging headroom - danger zone starts lower than raw CPU load.
+_RAM_BANDS = [(40, _COOL), (65, _GOOD), (85, _WARN), (95, _HOT), (None, _CRIT)]
+# Storage capacity: keeping meaningful free space matters for sustained SSD
+# performance/wear-leveling - common tooling warns around 80%, critical ~95%.
+_CAPACITY_BANDS = [(50, _COOL), (70, _GOOD), (85, _WARN), (95, _HOT), (None, _CRIT)]
+
+
+def cpu_load_color(pct):
+    return _tier_color(pct, _LOAD_BANDS)
+
+
+def gpu_load_color(pct):
+    return _tier_color(pct, _LOAD_BANDS)
+
+
+def ram_color(pct):
+    return _tier_color(pct, _RAM_BANDS)
+
+
+def ssd_capacity_color(pct):
+    return _tier_color(pct, _CAPACITY_BANDS)
+
+
 def _vertical_gradient(w: int, h: int, top, bottom) -> Image.Image:
     ys = np.linspace(0.0, 1.0, h, dtype=np.float32).reshape(h, 1, 1)
     top_arr = np.array(top, dtype=np.float32).reshape(1, 1, 3)
@@ -112,35 +159,56 @@ def draw_gauge(draw: ImageDraw.ImageDraw, cx, cy, radius, thickness, fraction, c
         draw.arc(bbox, start, start + (end - start) * fraction, fill=color, width=thickness)
 
 
-def draw_ring_metric(draw, cx, cy, radius, thickness, label, value_text, sub_text, fraction, color, s):
-    draw_gauge(draw, cx, cy, radius, thickness, fraction, color)
+def draw_ring_metric(draw, cx, cy, radius, thickness, label, value_text, value_color, sub_text, fraction, ring_color, s):
+    draw_gauge(draw, cx, cy, radius, thickness, fraction, ring_color)
     draw.text((cx, cy - radius - 13 * s), label, font=_load_font(12 * s), fill=MUTED_COLOR, anchor="mm")
-    value_font = _fit_text(draw, value_text, radius * 1.5, start_size=38 * s, min_size=18 * s)
-    draw.text((cx, cy - 5 * s), value_text, font=value_font, fill=TEXT_COLOR, anchor="mm")
-    draw.text((cx, cy + 16 * s), sub_text, font=_load_font(11.5 * s), fill=color, anchor="mm")
+    value_font = _fit_text(draw, value_text, radius * 1.2, start_size=29 * s, min_size=16 * s)
+    draw.text((cx, cy - 9 * s), value_text, font=value_font, fill=value_color, anchor="mm")
+    draw.text((cx, cy + 20 * s), sub_text, font=_load_font(11.5 * s), fill=ring_color, anchor="mm")
 
 
-def draw_metric_row(draw, x0, x1, y_center, label, value_text, fraction, color, s, label_w=42, value_w=50, bar_h=7):
+def draw_metric_row(draw, x0, x1, y_center, label, value_text, fraction, color, s, label_w=42, bar_h=7):
     label_w *= s
-    value_w *= s
     bar_h *= s
+    value_font = _fit_text(draw, value_text, (x1 - x0) * 0.6, start_size=12.5 * s, min_size=10 * s)
+    text_w = draw.textbbox((0, 0), value_text, font=value_font)[2]
     draw.text((x0, y_center), label, font=_load_font(11.5 * s), fill=MUTED_COLOR, anchor="lm")
     bar_x0 = x0 + label_w
-    bar_x1 = x1 - value_w
+    bar_x1 = x1 - text_w - 8 * s
     draw_stat_bar(draw, bar_x0, y_center - bar_h / 2, bar_x1 - bar_x0, bar_h, fraction, color)
-    draw.text((x1, y_center), value_text, font=_load_font(12.5 * s), fill=TEXT_COLOR, anchor="rm")
+    draw.text((x1, y_center), value_text, font=value_font, fill=TEXT_COLOR, anchor="rm")
 
 
-def _temp_fraction(celsius, lo=30.0, hi=70.0):
-    if celsius is None:
-        return 0.0
-    return max(0.0, min(1.0, (celsius - lo) / (hi - lo)))
+def draw_ssd_row(draw, x0, x1, y0, y1, s, temp_c, used_gb, total_gb, label_w=42, bar_h=11):
+    label_w *= s
+    bar_h *= s
+    line1_y = y0 + (y1 - y0) * 0.28
+    line2_y = y0 + (y1 - y0) * 0.74
+
+    draw.text((x0, line1_y), "SSD", font=_load_font(11.5 * s), fill=MUTED_COLOR, anchor="lm")
+    temp_text = f"{temp_c:.0f}°C" if temp_c is not None else "--°C"
+    draw.text((x1, line1_y), temp_text, font=_load_font(11.5 * s), fill=temp_color(temp_c), anchor="rm")
+
+    if total_gb:
+        fraction = max(0.0, min(1.0, (used_gb or 0) / total_gb))
+        used_tb, total_tb = used_gb / 1024.0, total_gb / 1024.0
+        cap_text = f"{used_tb:.1f}/{total_tb:.1f} TB ({fraction * 100:.0f}%)"
+    else:
+        fraction = 0.0
+        cap_text = "--/-- TB"
+
+    cap_font = _fit_text(draw, cap_text, (x1 - x0) * 0.62, start_size=12 * s, min_size=9 * s)
+    text_w = draw.textbbox((0, 0), cap_text, font=cap_font)[2]
+    bar_x0 = x0 + label_w
+    bar_x1 = x1 - text_w - 8 * s
+    draw_stat_bar(draw, bar_x0, line2_y - bar_h / 2, bar_x1 - bar_x0, bar_h, fraction, ssd_capacity_color(fraction * 100))
+    draw.text((x1, line2_y), cap_text, font=cap_font, fill=TEXT_COLOR, anchor="rm")
 
 
 def render(stats: dict, width: int = LM360_W, height: int = LM360_H) -> Image.Image:
     """stats keys expected (all optional, missing -> shown as --):
     cpu_temp_c, cpu_load_pct, cpu_freq_ghz, gpu_temp_c, gpu_load_pct,
-    ram_used_pct, ssd_temp_c, disk_busy_pct
+    ram_used_pct, ram_used_gb, ram_total_gb, ssd_temp_c, ssd_used_gb, ssd_total_gb
     """
     s = SUPERSAMPLE
     W, H = width * s, height * s
@@ -148,9 +216,9 @@ def render(stats: dict, width: int = LM360_W, height: int = LM360_H) -> Image.Im
     draw = ImageDraw.Draw(img)
 
     margin = 10 * s
-    gauge_radius = 45 * s
-    gauge_thickness = 9 * s
-    gauge_cy = 80 * s
+    gauge_radius = 42 * s
+    gauge_thickness = 8 * s
+    gauge_cy = 70 * s
     gauge_cx_left = 92 * s
     gauge_cx_right = W - 92 * s
 
@@ -164,9 +232,10 @@ def render(stats: dict, width: int = LM360_W, height: int = LM360_H) -> Image.Im
         gauge_thickness,
         "CPU",
         f"{cpu_temp:.0f}\u00b0" if cpu_temp is not None else "--\u00b0",
+        temp_color(cpu_temp),
         f"{cpu_load:.0f}% load" if cpu_load is not None else "-- load",
         (cpu_load or 0) / 100.0,
-        temp_color(cpu_temp),
+        cpu_load_color(cpu_load),
         s,
     )
 
@@ -180,58 +249,56 @@ def render(stats: dict, width: int = LM360_W, height: int = LM360_H) -> Image.Im
         gauge_thickness,
         "GPU",
         f"{gpu_temp:.0f}\u00b0" if gpu_temp is not None else "--\u00b0",
+        temp_color(gpu_temp),
         f"{gpu_load:.0f}% load" if gpu_load is not None else "-- load",
         (gpu_load or 0) / 100.0,
-        temp_color(gpu_temp),
+        gpu_load_color(gpu_load),
         s,
     )
 
-    panel_y0, panel_y1 = 144 * s, 232 * s
+    panel_y0, panel_y1 = 120 * s, 230 * s
     draw_rounded_rect(draw, (margin, panel_y0, W - margin, panel_y1), radius=10 * s, fill=PANEL_COLOR)
 
-    pad = 12 * s
+    pad = 8 * s
+    gap = 10 * s
     inner_x0, inner_x1 = margin + pad, W - margin - pad
-    content_top, content_bottom = panel_y0 + pad, panel_y1 - pad
-    row_spacing = (content_bottom - content_top) / 3
-    row_ys = [content_top + row_spacing * (i + 0.5) for i in range(3)]
+    ram_h, ssd_h = 34 * s, 50 * s
 
+    ram_y0 = panel_y0 + pad
+    ssd_y0 = ram_y0 + ram_h + gap
+
+    ram_used_gb = stats.get("ram_used_gb")
+    ram_total_gb = stats.get("ram_total_gb")
     ram_pct = stats.get("ram_used_pct")
+    if ram_pct is None and ram_used_gb is not None and ram_total_gb:
+        ram_pct = ram_used_gb / ram_total_gb * 100.0
+    if ram_used_gb is not None and ram_total_gb:
+        ram_text = f"{ram_used_gb:.0f}/{ram_total_gb:.0f} GB ({ram_pct:.0f}%)"
+    else:
+        ram_text = f"{ram_pct:.0f}%" if ram_pct is not None else "--%"
     draw_metric_row(
         draw,
         inner_x0,
         inner_x1,
-        row_ys[0],
+        ram_y0 + ram_h / 2,
         "RAM",
-        f"{ram_pct:.0f}%" if ram_pct is not None else "--%",
+        ram_text,
         (ram_pct or 0) / 100.0,
-        LOAD_COLOR,
+        ram_color(ram_pct),
         s,
+        bar_h=11,
     )
 
-    ssd_temp = stats.get("ssd_temp_c")
-    draw_metric_row(
+    draw_ssd_row(
         draw,
         inner_x0,
         inner_x1,
-        row_ys[1],
-        "SSD",
-        f"{ssd_temp:.0f}\u00b0C" if ssd_temp is not None else "--\u00b0C",
-        _temp_fraction(ssd_temp),
-        temp_color(ssd_temp),
+        ssd_y0,
+        ssd_y0 + ssd_h,
         s,
-    )
-
-    disk_pct = stats.get("disk_busy_pct")
-    draw_metric_row(
-        draw,
-        inner_x0,
-        inner_x1,
-        row_ys[2],
-        "DISK",
-        f"{disk_pct:.0f}%" if disk_pct is not None else "--%",
-        (disk_pct or 0) / 100.0,
-        LOAD_COLOR,
-        s,
+        stats.get("ssd_temp_c"),
+        stats.get("ssd_used_gb"),
+        stats.get("ssd_total_gb"),
     )
 
     return img.resize((width, height), Image.LANCZOS).convert("RGB")
