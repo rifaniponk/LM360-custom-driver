@@ -7,6 +7,10 @@ software stack in the background.
 ![Resolution](https://img.shields.io/badge/Resolution-320x240-blue)
 ![Platform](https://img.shields.io/badge/Platform-Windows-informational)
 
+![Live LM360 display](docs/lm360-display.jpg)
+
+*Live result from the custom driver running on a DeepCool LM360 pump-cap LCD.*
+
 ## What it shows
 
 - **CPU** and **GPU**: radial gauges - arc length is load %, arc color escalates through
