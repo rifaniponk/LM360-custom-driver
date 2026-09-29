@@ -64,24 +64,10 @@ def _fit_text(draw: ImageDraw.ImageDraw, text: str, max_width: float, start_size
     return _load_font(min_size)
 
 
-def temp_color(celsius: float | None) -> tuple[int, int, int]:
-    if celsius is None:
-        return MUTED_COLOR
-    if celsius < 40:
-        return (90, 170, 250)
-    if celsius < 60:
-        return (110, 210, 120)
-    if celsius < 75:
-        return (235, 210, 80)
-    if celsius < 85:
-        return (240, 150, 60)
-    return (235, 70, 70)
-
-
 # Shared 5-color scale (cool -> healthy -> warning -> hot -> critical), reused
 # across metrics so the same color always means roughly the same "how worried
-# should I be" - but the % thresholds that trigger each color differ per
-# metric, calibrated to what's actually normal for that kind of number.
+# should I be" - but the thresholds that trigger each color differ per metric,
+# calibrated to what's actually normal for that specific kind of number.
 _COOL = (90, 170, 250)
 _GOOD = (110, 210, 120)
 _WARN = (235, 210, 80)
@@ -99,6 +85,23 @@ def _tier_color(value: float | None, bands):
     return bands[-1][1]
 
 
+# Temperature bands per component - CPU/GPU/SSD have very different normal
+# operating ranges, so one shared scale reads wrong for at least two of them.
+#
+# CPU: modern desktop CPUs (Intel/AMD) idle ~30-45C, run comfortably warm
+# under sustained load into the 60-70s, and commonly throttle/TjMax around
+# 95-100C - red leaves ~10C of headroom below that as an early warning.
+_CPU_TEMP_BANDS = [(45, _COOL), (65, _GOOD), (78, _WARN), (90, _HOT), (None, _CRIT)]
+# GPU: discrete GPUs are designed to run hotter than CPUs as part of normal
+# boost behavior - NVIDIA's stock GPU Boost thermal target is ~83C on most
+# cards, and typical throttle/hotspot risk starts around 90-95C.
+_GPU_TEMP_BANDS = [(45, _COOL), (75, _GOOD), (83, _WARN), (90, _HOT), (None, _CRIT)]
+# NVMe SSD: consumer drives idle ~30-40C; vendor warning/critical composite
+# temperature thresholds (NVMe WCTEMP/CCTEMP) commonly sit around 70-85C, but
+# this band runs more cautious than that spec ceiling - there's less thermal
+# margin and less benefit to running hot, so the warning zone starts early.
+_SSD_TEMP_BANDS = [(35, _COOL), (45, _GOOD), (55, _WARN), (65, _HOT), (None, _CRIT)]
+
 # CPU/GPU load and disk I/O activity are instantaneous utilization - brief
 # spikes to 100% are normal, so the danger zone starts high.
 _LOAD_BANDS = [(25, _COOL), (50, _GOOD), (75, _WARN), (90, _HOT), (None, _CRIT)]
@@ -108,6 +111,18 @@ _RAM_BANDS = [(40, _COOL), (65, _GOOD), (85, _WARN), (95, _HOT), (None, _CRIT)]
 # Storage capacity: keeping meaningful free space matters for sustained SSD
 # performance/wear-leveling - common tooling warns around 80%, critical ~95%.
 _CAPACITY_BANDS = [(50, _COOL), (70, _GOOD), (85, _WARN), (95, _HOT), (None, _CRIT)]
+
+
+def cpu_temp_color(celsius):
+    return _tier_color(celsius, _CPU_TEMP_BANDS)
+
+
+def gpu_temp_color(celsius):
+    return _tier_color(celsius, _GPU_TEMP_BANDS)
+
+
+def ssd_temp_color(celsius):
+    return _tier_color(celsius, _SSD_TEMP_BANDS)
 
 
 def cpu_load_color(pct):
@@ -187,7 +202,7 @@ def draw_ssd_row(draw, x0, x1, y0, y1, s, temp_c, used_gb, total_gb, label_w=42,
 
     draw.text((x0, line1_y), "SSD", font=_load_font(11.5 * s), fill=MUTED_COLOR, anchor="lm")
     temp_text = f"{temp_c:.0f}°C" if temp_c is not None else "--°C"
-    draw.text((x1, line1_y), temp_text, font=_load_font(11.5 * s), fill=temp_color(temp_c), anchor="rm")
+    draw.text((x1, line1_y), temp_text, font=_load_font(11.5 * s), fill=ssd_temp_color(temp_c), anchor="rm")
 
     if total_gb:
         fraction = max(0.0, min(1.0, (used_gb or 0) / total_gb))
@@ -232,7 +247,7 @@ def render(stats: dict, width: int = LM360_W, height: int = LM360_H) -> Image.Im
         gauge_thickness,
         "CPU",
         f"{cpu_temp:.0f}\u00b0" if cpu_temp is not None else "--\u00b0",
-        temp_color(cpu_temp),
+        cpu_temp_color(cpu_temp),
         f"{cpu_load:.0f}% load" if cpu_load is not None else "-- load",
         (cpu_load or 0) / 100.0,
         cpu_load_color(cpu_load),
@@ -249,7 +264,7 @@ def render(stats: dict, width: int = LM360_W, height: int = LM360_H) -> Image.Im
         gauge_thickness,
         "GPU",
         f"{gpu_temp:.0f}\u00b0" if gpu_temp is not None else "--\u00b0",
-        temp_color(gpu_temp),
+        gpu_temp_color(gpu_temp),
         f"{gpu_load:.0f}% load" if gpu_load is not None else "-- load",
         (gpu_load or 0) / 100.0,
         gpu_load_color(gpu_load),
