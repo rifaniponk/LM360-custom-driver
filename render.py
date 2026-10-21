@@ -31,6 +31,9 @@ _FONT_CANDIDATES = [
     "arial.ttf",
     "C:\\Windows\\Fonts\\segoeui.ttf",
     "C:\\Windows\\Fonts\\arial.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "DejaVuSans.ttf",
 ]
 
 _font_cache: dict[int, ImageFont.ImageFont] = {}

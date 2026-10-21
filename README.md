@@ -5,7 +5,7 @@ A small, lightweight replacement for DeepCool's factory app - just to drive the 
 software stack in the background.
 
 ![Resolution](https://img.shields.io/badge/Resolution-320x240-blue)
-![Platform](https://img.shields.io/badge/Platform-Windows-informational)
+![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-informational)
 
 ![Live LM360 display](docs/lm360-display.jpg)
 
@@ -34,6 +34,8 @@ and its documented init/frame/brightness command bytes matched this project's ex
 
 ## Requirements
 
+### Windows
+
 - Windows 10/11
 - Python 3.10+
 - [PawnIO](https://github.com/namazso/PawnIO) kernel driver (for CPU temperature/clock sensors via
@@ -42,7 +44,29 @@ and its documented init/frame/brightness command bytes matched this project's ex
   `install.ps1` registers it that way automatically; without elevation, CPU load/GPU temp+load
   still work, only CPU temp/clock come back blank
 
+### Linux
+
+- Python 3.10+ with `venv` (tested on Kubuntu)
+- CPU/NVMe temps come from hwmon (`k10temp`/`coretemp`, `nvme`) - no root or extra kernel
+  driver needed
+- GPU: NVIDIA via NVML (ships with the proprietary driver), otherwise AMD via amdgpu sysfs
+
 ## Install
+
+### Linux
+
+Run `./install.sh` as your normal user (it asks for sudo only to install the udev rule). This:
+
+1. Creates `.venv/` and installs the Python dependencies (`requirements.txt`)
+2. Installs a udev rule (`/etc/udev/rules.d/70-lm360-display.rules`) so the display is usable
+   without root
+3. Installs and starts a systemd user service (`lm360-display.service`) that runs at login and
+   restarts on failure
+
+Logs: `journalctl --user -u lm360-display -f`, or `~/.local/state/LM360Driver/logs/`.
+Remove with `./uninstall.sh`.
+
+### Windows
 
 Right-click `Install.cmd` and run as administrator (or run `install.ps1` from an elevated
 PowerShell prompt). This:
@@ -53,11 +77,9 @@ PowerShell prompt). This:
 4. Registers a hidden, highest-privilege Task Scheduler task (`LM360CustomDisplay`) that starts
    the driver at logon and restarts it on failure
 
-## Uninstall
-
-Right-click `Uninstall.cmd` and run as administrator. Removes the scheduled task and stops any
-running instance. Leaves PawnIO and the pip packages installed since other tools may depend on
-them.
+To uninstall, right-click `Uninstall.cmd` and run as administrator. Removes the scheduled task
+and stops any running instance. Leaves PawnIO and the pip packages installed since other tools
+may depend on them.
 
 ## Architecture
 
@@ -68,9 +90,11 @@ never touches Pillow beyond calling into `render.py`'s RGB565 conversion as a bl
 |---|---|
 | `render.py` | Pure Pillow drawing - takes plain sensor dicts in, returns a PIL `Image` out. OS/hardware-independent. |
 | `lm360_display.py` | USB transport for the LM360 panel (connect, init, send frames, brightness) via `pyusb` + `libusb-package`. |
+| `sensors_linux.py` | Linux equivalent - psutil/hwmon for CPU/RAM/storage temp, NVML for NVIDIA GPUs, amdgpu sysfs fallback. |
 | `sensors_windows.py` | CPU/GPU/RAM/storage temp via LibreHardwareMonitorLib (pythonnet), storage capacity via `shutil`, integrated-GPU load fallback via Windows PDH. |
-| `pc_display.py` | Main loop - sensors -> render -> transport, ~1fps, with reconnect-on-failure and rotating file logging. |
-| `libs/` | Vendored LibreHardwareMonitorLib.dll and its .NET Framework dependency DLLs (from the [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) release, MIT). |
+| `pc_display.py` | Main loop - sensors -> render -> transport, ~1fps, with reconnect-on-failure and rotating file logging. Picks the sensor module by platform. |
+| `install.sh` / `uninstall.sh` | Linux setup - venv, udev rule, systemd user service. |
+| `libs/` | Windows only - vendored LibreHardwareMonitorLib.dll and its .NET Framework dependency DLLs (from the [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) release, MIT). |
 
 ## Credits
 

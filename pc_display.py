@@ -3,7 +3,7 @@
 Runs at ~1fps with reconnect-on-failure so it survives the AIO being
 unplugged/replugged or a transient USB error. Logs to a rotating file (in
 addition to the console when attached to one) since this runs headless under
-Task Scheduler most of the time.
+Task Scheduler (Windows) or a systemd user service (Linux) most of the time.
 """
 
 from __future__ import annotations
@@ -16,10 +16,18 @@ import sys
 import time
 
 import render
-import sensors_windows
 from lm360_display import DeviceNotFoundError, LM360Display
 
-LOG_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.dirname(os.path.abspath(__file__))), "LM360Driver", "logs")
+if sys.platform == "win32":
+    import sensors_windows as sensors
+
+    _LOG_BASE = os.environ.get("LOCALAPPDATA", os.path.dirname(os.path.abspath(__file__)))
+else:
+    import sensors_linux as sensors
+
+    _LOG_BASE = os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))
+
+LOG_DIR = os.path.join(_LOG_BASE, "LM360Driver", "logs")
 LOG_FILE = os.path.join(LOG_DIR, "pc_display.log")
 
 FRAME_INTERVAL_SEC = 1.0
@@ -70,7 +78,7 @@ def main() -> None:
 
     logger.info("Starting pc_display")
 
-    reader = sensors_windows.SensorReader()
+    reader = sensors.SensorReader()
     display = LM360Display()
 
     try:
