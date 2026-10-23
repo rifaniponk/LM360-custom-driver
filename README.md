@@ -53,6 +53,10 @@ PowerShell prompt). This:
 4. Registers a hidden, highest-privilege Task Scheduler task (`LM360CustomDisplay`) that starts
    the driver at logon and restarts it on failure
 
+If the pump is mounted so the display reads upside down, flip the view 180 degrees by
+running `install.ps1 -Rotate 180` from an elevated PowerShell prompt (re-running the installer
+updates the existing task). When running manually: `python pc_display.py --rotate 180`.
+
 ## Uninstall
 
 Right-click `Uninstall.cmd` and run as administrator. Removes the scheduled task and stops any

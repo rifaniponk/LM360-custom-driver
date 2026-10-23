@@ -8,6 +8,7 @@ Task Scheduler most of the time.
 
 from __future__ import annotations
 
+import argparse
 import logging
 import logging.handlers
 import os
@@ -17,6 +18,8 @@ import time
 
 import render
 import sensors_windows
+from PIL import Image
+
 from lm360_display import DeviceNotFoundError, LM360Display
 
 LOG_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.dirname(os.path.abspath(__file__))), "LM360Driver", "logs")
@@ -63,12 +66,21 @@ def _wait_for_device(display: LM360Display) -> None:
             time.sleep(RECONNECT_BACKOFF_SEC)
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Drive the DeepCool LM360 LCD with PC stats.")
+    # The panel is 320x240, so only 180 keeps the layout fitting; 90/270 would need a portrait layout.
+    parser.add_argument("--rotate", type=int, choices=(0, 180), default=0,
+                        help="Rotate the rendered view by this many degrees (for upside-down AIO mounting)")
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = _parse_args()
     _setup_logging()
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    logger.info("Starting pc_display")
+    logger.info("Starting pc_display (rotate=%s)", args.rotate)
 
     reader = sensors_windows.SensorReader()
     display = LM360Display()
@@ -81,6 +93,8 @@ def main() -> None:
             try:
                 stats = reader.read()
                 image = render.render(stats)
+                if args.rotate == 180:
+                    image = image.transpose(Image.Transpose.ROTATE_180)
                 display.send_frame(image)
             except Exception:
                 logger.exception("Frame update failed, reconnecting")

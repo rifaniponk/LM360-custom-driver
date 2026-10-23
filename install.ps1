@@ -5,11 +5,15 @@ Installs the LM360 custom display driver:
   - installs the PawnIO kernel driver (LibreHardwareMonitorLib needs it for CPU sensor access)
   - disables DeepCool's factory app autostart
   - registers a hidden, highest-privilege logon Task Scheduler task running pc_display.py
+
+Use -Rotate 180 if the AIO is mounted so the display appears upside down.
 #>
 
 param(
     [switch]$SkipPawnIO,
-    [switch]$SkipDisableVendorAutostart
+    [switch]$SkipDisableVendorAutostart,
+    [ValidateSet(0, 180)]
+    [int]$Rotate = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -73,7 +77,12 @@ Write-Host "== Registering scheduled task =="
 $pythonPath = (Get-Command python).Source
 $scriptPath = Join-Path $ScriptDir "pc_display.py"
 
-$action = New-ScheduledTaskAction -Execute $pythonPath -Argument "`"$scriptPath`"" -WorkingDirectory $ScriptDir
+$taskArgs = "`"$scriptPath`""
+if ($Rotate -ne 0) {
+    $taskArgs += " --rotate $Rotate"
+}
+
+$action = New-ScheduledTaskAction -Execute $pythonPath -Argument $taskArgs -WorkingDirectory $ScriptDir
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
 $settings = New-ScheduledTaskSettingsSet -Hidden -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
