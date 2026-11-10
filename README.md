@@ -15,7 +15,8 @@ software stack in the background.
 
 - **CPU** and **GPU**: radial gauges - arc length is load %, arc color escalates through
   cool/green/yellow/orange/red as load rises, with the temperature as a smaller centered number
-  (colored by its own temperature scale)
+  (colored by its own temperature scale). Multi-GPU systems get one gauge per GPU (`GPU 1`,
+  `GPU 2`, ...) laid out alongside the CPU gauge
 - **RAM**: used/total (`51/128 GB (40%)`) with a color-tiered bar
 - **SSD**: used/total capacity (`1.6/1.8 TB (89%)`) with a color-tiered bar, plus temperature as a
   plain colored number alongside

@@ -37,32 +37,32 @@ def _pick_temp(temps: dict, chips: list[str], prefer: list[str]) -> float | None
 
 
 class NvidiaReader:
-    """First NVIDIA GPU via NVML (nvidia-ml-py). Unavailable -> read() returns None."""
+    """All NVIDIA GPUs via NVML (nvidia-ml-py). Unavailable -> read() returns []."""
 
     def __init__(self):
         self._nvml = None
-        self._handle = None
+        self._handles = []
         try:
             import pynvml
 
             pynvml.nvmlInit()
-            if pynvml.nvmlDeviceGetCount() > 0:
-                self._nvml = pynvml
-                self._handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            self._nvml = pynvml
+            self._handles = [pynvml.nvmlDeviceGetHandleByIndex(i) for i in range(pynvml.nvmlDeviceGetCount())]
         except Exception:
             logger.debug("NVML unavailable", exc_info=True)
 
-    def read(self) -> tuple[float | None, float | None] | None:
-        if self._handle is None:
-            return None
+    def read(self) -> list[tuple[float | None, float | None]]:
         nvml = self._nvml
-        try:
-            temp = nvml.nvmlDeviceGetTemperature(self._handle, nvml.NVML_TEMPERATURE_GPU)
-            load = nvml.nvmlDeviceGetUtilizationRates(self._handle).gpu
-            return float(temp), float(load)
-        except Exception:
-            logger.debug("NVML read failed", exc_info=True)
-            return None
+        gpus = []
+        for handle in self._handles:
+            temp = load = None
+            try:
+                temp = float(nvml.nvmlDeviceGetTemperature(handle, nvml.NVML_TEMPERATURE_GPU))
+                load = float(nvml.nvmlDeviceGetUtilizationRates(handle).gpu)
+            except Exception:
+                logger.debug("NVML read failed", exc_info=True)
+            gpus.append((temp, load))
+        return gpus
 
     def close(self) -> None:
         if self._nvml is not None:
@@ -71,7 +71,7 @@ class NvidiaReader:
             except Exception:
                 logger.debug("Error shutting down NVML", exc_info=True)
             self._nvml = None
-            self._handle = None
+            self._handles = []
 
 
 class AmdGpuReader:
@@ -118,9 +118,11 @@ class SensorReader:
         freq = psutil.cpu_freq()
         stats["cpu_freq_ghz"] = (freq.current / 1000.0) if freq else None
 
-        gpu = self._nvidia.read() or self._amdgpu.read(temps)
-        if gpu is not None:
-            stats["gpu_temp_c"], stats["gpu_load_pct"] = gpu
+        gpus = self._nvidia.read()
+        if not gpus:
+            amd = self._amdgpu.read(temps)
+            gpus = [amd] if amd is not None else []
+        stats["gpus"] = [{"temp_c": temp, "load_pct": load} for temp, load in gpus]
 
         mem = psutil.virtual_memory()
         stats["ram_used_gb"] = (mem.total - mem.available) / (1024 ** 3)

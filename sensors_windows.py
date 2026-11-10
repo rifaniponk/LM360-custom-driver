@@ -126,7 +126,8 @@ class SensorReader:
     def read(self) -> dict:
         stats: dict = {}
         cpu_hw = None
-        gpu_hw = None
+        nvidia_hw = []
+        other_gpu_hw = None
         memory_hw = None
         storage_temp = None
 
@@ -134,12 +135,13 @@ class SensorReader:
             self._update_all(hw)
             if cpu_hw is None and hw.HardwareType == self._HardwareType.Cpu:
                 cpu_hw = hw
-            elif gpu_hw is None and hw.HardwareType in (
-                self._HardwareType.GpuNvidia,
+            elif hw.HardwareType == self._HardwareType.GpuNvidia:
+                nvidia_hw.append(hw)
+            elif other_gpu_hw is None and hw.HardwareType in (
                 self._HardwareType.GpuAmd,
                 self._HardwareType.GpuIntel,
             ):
-                gpu_hw = hw
+                other_gpu_hw = hw
             elif hw.HardwareType == self._HardwareType.Memory and "virtual" not in str(hw.Name).lower():
                 if memory_hw is None:
                     memory_hw = hw
@@ -155,16 +157,20 @@ class SensorReader:
             clock = self._pick(sensors, self._SensorType.Clock, ["average"])
             stats["cpu_freq_ghz"] = (clock / 1000.0) if clock else None
 
-        if gpu_hw is not None:
+        # Every NVIDIA card gets its own gauge; otherwise fall back to the first
+        # AMD/Intel GPU, then to the PDH counter for an unenumerated iGPU.
+        gpu_hws = nvidia_hw or ([other_gpu_hw] if other_gpu_hw is not None else [])
+        stats["gpus"] = []
+        for gpu_hw in gpu_hws:
             sensors = list(gpu_hw.Sensors)
-            stats["gpu_temp_c"] = self._pick(
-                sensors, self._SensorType.Temperature, ["core", "hot spot", "edge"]
-            )
-            stats["gpu_load_pct"] = self._pick(sensors, self._SensorType.Load, ["core", "3d", "total"])
-        else:
+            stats["gpus"].append({
+                "temp_c": self._pick(sensors, self._SensorType.Temperature, ["core", "hot spot", "edge"]),
+                "load_pct": self._pick(sensors, self._SensorType.Load, ["core", "3d", "total"]),
+            })
+        if not gpu_hws:
             igpu_load = self._igpu_pdh.read()
             if igpu_load is not None:
-                stats["gpu_load_pct"] = igpu_load
+                stats["gpus"].append({"temp_c": None, "load_pct": igpu_load})
 
         if memory_hw is not None:
             sensors = list(memory_hw.Sensors)

@@ -182,7 +182,14 @@ def draw_ring_metric(draw, cx, cy, radius, thickness, label, value_text, value_c
     draw.text((cx, cy - radius - 13 * s), label, font=_load_font(12 * s), fill=MUTED_COLOR, anchor="mm")
     value_font = _fit_text(draw, value_text, radius * 1.2, start_size=29 * s, min_size=16 * s)
     draw.text((cx, cy - 9 * s), value_text, font=value_font, fill=value_color, anchor="mm")
-    draw.text((cx, cy + 20 * s), sub_text, font=_load_font(11.5 * s), fill=ring_color, anchor="mm")
+    # Sub text sits low in the ring where the arc narrows - fit it to the chord
+    # width at that height so e.g. "100% load" doesn't run into the ring.
+    sub_dy = 20 * s
+    inner = radius - thickness / 2
+    text_bottom = sub_dy + 5 * s
+    chord = 2 * (max(inner ** 2 - text_bottom ** 2, 0)) ** 0.5 - 6 * s
+    sub_font = _fit_text(draw, sub_text, chord, start_size=11.5 * s, min_size=8 * s)
+    draw.text((cx, cy + sub_dy), sub_text, font=sub_font, fill=ring_color, anchor="mm")
 
 
 def draw_metric_row(draw, x0, x1, y_center, label, value_text, fraction, color, s, label_w=42, bar_h=7):
@@ -225,8 +232,8 @@ def draw_ssd_row(draw, x0, x1, y0, y1, s, temp_c, used_gb, total_gb, label_w=42,
 
 def render(stats: dict, width: int = LM360_W, height: int = LM360_H) -> Image.Image:
     """stats keys expected (all optional, missing -> shown as --):
-    cpu_temp_c, cpu_load_pct, cpu_freq_ghz, gpu_temp_c, gpu_load_pct,
-    ram_used_pct, ram_used_gb, ram_total_gb, ssd_temp_c, ssd_used_gb, ssd_total_gb
+    cpu_temp_c, cpu_load_pct, cpu_freq_ghz, gpus ([{temp_c, load_pct}, ...] -
+    one gauge each; legacy gpu_temp_c/gpu_load_pct still accepted), ram_used_pct, ram_used_gb, ram_total_gb, ssd_temp_c, ssd_used_gb, ssd_total_gb
     """
     s = SUPERSAMPLE
     W, H = width * s, height * s
@@ -234,45 +241,47 @@ def render(stats: dict, width: int = LM360_W, height: int = LM360_H) -> Image.Im
     draw = ImageDraw.Draw(img)
 
     margin = 10 * s
-    gauge_radius = 42 * s
-    gauge_thickness = 8 * s
     gauge_cy = 70 * s
-    gauge_cx_left = 92 * s
-    gauge_cx_right = W - 92 * s
 
     cpu_temp = stats.get("cpu_temp_c")
     cpu_load = stats.get("cpu_load_pct")
-    draw_ring_metric(
-        draw,
-        gauge_cx_left,
-        gauge_cy,
-        gauge_radius,
-        gauge_thickness,
-        "CPU",
-        f"{cpu_temp:.0f}\u00b0" if cpu_temp is not None else "--\u00b0",
-        cpu_temp_color(cpu_temp),
-        f"{cpu_load:.0f}% load" if cpu_load is not None else "-- load",
-        (cpu_load or 0) / 100.0,
-        cpu_load_color(cpu_load),
-        s,
-    )
+    gauges = [("CPU", cpu_temp, cpu_load, cpu_temp_color, cpu_load_color)]
 
-    gpu_temp = stats.get("gpu_temp_c")
-    gpu_load = stats.get("gpu_load_pct")
-    draw_ring_metric(
-        draw,
-        gauge_cx_right,
-        gauge_cy,
-        gauge_radius,
-        gauge_thickness,
-        "GPU",
-        f"{gpu_temp:.0f}\u00b0" if gpu_temp is not None else "--\u00b0",
-        gpu_temp_color(gpu_temp),
-        f"{gpu_load:.0f}% load" if gpu_load is not None else "-- load",
-        (gpu_load or 0) / 100.0,
-        gpu_load_color(gpu_load),
-        s,
-    )
+    gpus = stats.get("gpus")
+    if gpus is None:  # legacy single-GPU keys
+        gpus = [{"temp_c": stats.get("gpu_temp_c"), "load_pct": stats.get("gpu_load_pct")}]
+    if not gpus:
+        gpus = [{}]
+    for i, gpu in enumerate(gpus):
+        label = "GPU" if len(gpus) == 1 else f"GPU {i + 1}"
+        gauges.append((label, gpu.get("temp_c"), gpu.get("load_pct"), gpu_temp_color, gpu_load_color))
+
+    if len(gauges) <= 2:
+        # Original two-gauge layout
+        gauge_radius, gauge_thickness = 42 * s, 8 * s
+        centers = [92 * s, W - 92 * s]
+    else:
+        # Spread evenly across the width, shrinking the rings to fit
+        slot = W / len(gauges)
+        gauge_thickness = 8 * s if len(gauges) == 3 else 6 * s
+        gauge_radius = min(42 * s, slot / 2 - gauge_thickness / 2 - 5 * s)
+        centers = [slot * (i + 0.5) for i in range(len(gauges))]
+
+    for cx, (label, temp, load, temp_color, load_color) in zip(centers, gauges):
+        draw_ring_metric(
+            draw,
+            cx,
+            gauge_cy,
+            gauge_radius,
+            gauge_thickness,
+            label,
+            f"{temp:.0f}\u00b0" if temp is not None else "--\u00b0",
+            temp_color(temp),
+            f"{load:.0f}% load" if load is not None else "-- load",
+            (load or 0) / 100.0,
+            load_color(load),
+            s,
+        )
 
     panel_y0, panel_y1 = 120 * s, 230 * s
     draw_rounded_rect(draw, (margin, panel_y0, W - margin, panel_y1), radius=10 * s, fill=PANEL_COLOR)
