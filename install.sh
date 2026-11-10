@@ -2,7 +2,22 @@
 # Linux installer: venv + deps, udev rule for non-root USB access, and a
 # systemd user service that starts the driver at login and restarts on failure.
 # Run as your normal user (it calls sudo only for the udev rule).
+#
+# Usage: ./install.sh [--rotate 0|180]
 set -euo pipefail
+
+ROTATE=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --rotate) ROTATE="${2:-}"; shift 2 ;;
+        --rotate=*) ROTATE="${1#*=}"; shift ;;
+        *) echo "Unknown argument: $1" >&2; exit 1 ;;
+    esac
+done
+if [[ "$ROTATE" != 0 && "$ROTATE" != 180 ]]; then
+    echo "--rotate must be 0 or 180" >&2
+    exit 1
+fi
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_NAME="lm360-display.service"
@@ -35,7 +50,7 @@ Description=LM360 custom display driver
 After=graphical-session.target
 
 [Service]
-ExecStart=$DIR/.venv/bin/python $DIR/pc_display.py
+ExecStart=$DIR/.venv/bin/python $DIR/pc_display.py --rotate $ROTATE
 WorkingDirectory=$DIR
 Restart=on-failure
 RestartSec=5

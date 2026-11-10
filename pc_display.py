@@ -8,6 +8,7 @@ Task Scheduler (Windows) or a systemd user service (Linux) most of the time.
 
 from __future__ import annotations
 
+import argparse
 import logging
 import logging.handlers
 import os
@@ -71,12 +72,25 @@ def _wait_for_device(display: LM360Display) -> None:
             time.sleep(RECONNECT_BACKOFF_SEC)
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Drive the DeepCool LM360 pump-cap LCD.")
+    parser.add_argument(
+        "--rotate",
+        type=int,
+        choices=(0, 180),
+        default=0,
+        help="rotate the rendered frame (180 for an upside-down mounted pump)",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = _parse_args()
     _setup_logging()
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    logger.info("Starting pc_display")
+    logger.info("Starting pc_display (rotate=%s)", args.rotate)
 
     reader = sensors.SensorReader()
     display = LM360Display()
@@ -89,6 +103,8 @@ def main() -> None:
             try:
                 stats = reader.read()
                 image = render.render(stats)
+                if args.rotate:
+                    image = image.rotate(args.rotate)
                 display.send_frame(image)
             except Exception:
                 logger.exception("Frame update failed, reconnecting")

@@ -64,6 +64,9 @@ Run `./install.sh` as your normal user (it asks for sudo only to install the ude
 3. Installs and starts a systemd user service (`lm360-display.service`) that runs at login and
    restarts on failure
 
+If your pump is mounted so the display reads upside down, install with `./install.sh --rotate 180`
+(or run `pc_display.py --rotate 180` directly).
+
 Logs: `journalctl --user -u lm360-display -f`, or `~/.local/state/LM360Driver/logs/`.
 Remove with `./uninstall.sh`.
 
